@@ -1,14 +1,12 @@
 import chalk from "chalk";
 import ora from "ora";
 import type { Command } from "commander";
-import { getLinkedStatus, verifyAuth, isCliInstalled } from "../services/auth.js";
+import { verifyAuth, isCliInstalled } from "../services/auth.js";
 import { fetchLogs } from "../services/logs.js";
 import { parsePeriod } from "../utils/time.js";
 
 interface LogsOptions {
   period: string;
-  service?: string;
-  environment?: string;
   lines?: string;
   filter?: string;
   build?: boolean;
@@ -18,40 +16,38 @@ interface LogsOptions {
 export function registerLogsCommand(program: Command): void {
   program
     .command("logs")
-    .description("Fetch and display logs for a Railway service")
+    .description("Fetch and display logs for a Railway service (requires Railway CLI)")
     .option("-p, --period <period>", "Time period (e.g., 1h, 6h, 24h, 7d)", "1h")
-    .option("-s, --service <name>", "Service name or ID")
-    .option("-e, --environment <name>", "Environment name or ID")
     .option("-n, --lines <count>", "Number of log lines", "100")
     .option("-f, --filter <query>", "Log filter query (Railway filter syntax)")
     .option("-b, --build", "Show build logs instead of deploy logs")
     .option("--json", "Output as JSON")
-    .action(async (options: LogsOptions) => {
+    .action(async (options: LogsOptions, cmd: Command) => {
+      const globals = cmd.optsWithGlobals();
+      const serviceId: string | undefined = globals.serviceId;
       const spinner = ora();
 
       try {
         if (!isCliInstalled()) {
-          console.error(chalk.red("Railway CLI not found. Install: npm install -g @railway/cli"));
+          console.error(
+            chalk.red(
+              "The logs command requires the Railway CLI.\n" +
+                "Install: npm install -g @railway/cli\n\n" +
+                "Other commands (analyze, metrics, status) work without the CLI."
+            )
+          );
           process.exit(1);
         }
 
         spinner.start("Verifying authentication...");
-        verifyAuth();
+        await verifyAuth();
         spinner.succeed("Authenticated");
-
-        spinner.start("Getting project context...");
-        const status = getLinkedStatus();
-        spinner.succeed("Project context loaded");
-
-        const serviceName = options.service || status.service?.name;
-        const environmentName = options.environment || status.environment?.name;
 
         const { start, end } = parsePeriod(options.period);
 
         spinner.start("Fetching logs...");
         const logs = fetchLogs({
-          serviceName,
-          environmentName,
+          serviceId,
           since: start,
           until: end,
           lines: options.lines ? parseInt(options.lines, 10) : 100,
@@ -77,7 +73,6 @@ export function registerLogsCommand(program: Command): void {
           console.log(`${ts} ${severity} ${entry.message}`);
         }
 
-        // Summary
         const errors = logs.filter(
           (l) => l.severity === "error" || l.severity === "ERROR"
         ).length;

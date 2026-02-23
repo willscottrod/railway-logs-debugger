@@ -37,7 +37,7 @@ export type MetricTag =
   | "SERVICE_ID";
 
 export interface MetricValue {
-  ts: string;
+  ts: number;
   value: number;
 }
 
@@ -107,9 +107,11 @@ export interface ServiceHealthReport {
     memory: MetricSummary;
     networkRx: MetricSummary;
     networkTx: MetricSummary;
+    http?: HttpMetrics;
   };
   deployments: DeploymentNode[];
   logs: LogEntry[];
+  timeline?: TimelineWindow[];
 }
 
 export interface MetricSummary {
@@ -120,4 +122,65 @@ export interface MetricSummary {
   latest: number;
   dataPoints: number;
   values: MetricValue[];
+}
+
+// --- HTTP Metrics (from Railway internal API) ---
+
+export interface HttpDurationSample {
+  ts: number;
+  p50: number;
+  p90: number;
+  p95: number;
+  p99: number;
+}
+
+export interface HttpStatusGroup {
+  statusCode: number;
+  samples: Array<{ ts: number; value: number }>;
+}
+
+export interface HttpMetricsResponse {
+  httpDurationMetrics: {
+    samples: HttpDurationSample[];
+  };
+  httpMetricsGroupedByStatus: HttpStatusGroup[];
+}
+
+export interface HttpLatencySummary {
+  avg: number;
+  min: number;
+  max: number;
+  latest: number;
+  dataPoints: number;
+}
+
+export interface HttpStatusBucket {
+  bucket: string;
+  count: number;
+  codes: Record<number, number>;
+}
+
+export interface HttpMetrics {
+  latency: {
+    p50: HttpLatencySummary;
+    p90: HttpLatencySummary;
+    p95: HttpLatencySummary;
+    p99: HttpLatencySummary;
+  };
+  statusCodes: HttpStatusBucket[];
+  totalRequests: number;
+  latencySamples: HttpDurationSample[];
+  statusCodeSamples: Array<{ ts: number; statusCode: number; count: number }>;
+}
+
+export interface TimelineWindow {
+  start: string;
+  end: string;
+  cpu: number;
+  memoryMb: number;
+  p99: number;
+  requests: number;
+  errors5xx: number;
+  errorLogs: number;
+  isAnomaly: boolean;
 }

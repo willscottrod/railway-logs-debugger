@@ -6,6 +6,7 @@ export interface FetchLogsOptions {
   serviceName?: string;
   environmentId?: string;
   environmentName?: string;
+  deploymentId?: string;
   since?: string;
   until?: string;
   lines?: number;
@@ -16,16 +17,16 @@ export interface FetchLogsOptions {
 /**
  * Fetch logs using the Railway CLI.
  *
- * The Railway GraphQL API has known limitations with deploymentLogs and buildLogs,
- * so the recommended approach is to use the CLI directly.
+ * Supported CLI flags: --service, --environment, --build, --json, [DEPLOYMENT_ID]
+ * The CLI does NOT support --lines, --since, --until, or --filter, so those
+ * are handled client-side after fetching.
  */
 export function fetchLogs(options: FetchLogsOptions): LogEntry[] {
   const args: string[] = ["railway", "logs"];
 
-  if (options.lines) {
-    args.push("--lines", String(options.lines));
-  } else {
-    args.push("--lines", "500");
+  // Positional deployment ID — scopes logs to a specific deployment
+  if (options.deploymentId) {
+    args.push(options.deploymentId);
   }
 
   if (options.serviceName) {
@@ -40,18 +41,6 @@ export function fetchLogs(options: FetchLogsOptions): LogEntry[] {
     args.push("--environment", options.environmentId);
   }
 
-  if (options.since) {
-    args.push("--since", options.since);
-  }
-
-  if (options.until) {
-    args.push("--until", options.until);
-  }
-
-  if (options.filter) {
-    args.push("--filter", options.filter);
-  }
-
   if (options.build) {
     args.push("--build");
   }
@@ -63,20 +52,77 @@ export function fetchLogs(options: FetchLogsOptions): LogEntry[] {
       stdio: "pipe",
       encoding: "utf-8",
       timeout: 30_000,
+      env: process.env,
     });
 
-    return parseLogOutput(output);
+    let entries = parseLogOutput(output);
+
+    // Client-side time filtering (CLI doesn't support --since/--until)
+    if (options.since) {
+      const sinceMs = new Date(options.since).getTime();
+      entries = entries.filter((e) => new Date(e.timestamp).getTime() >= sinceMs);
+    }
+    if (options.until) {
+      const untilMs = new Date(options.until).getTime();
+      entries = entries.filter((e) => new Date(e.timestamp).getTime() <= untilMs);
+    }
+
+    // Client-side text filtering (CLI doesn't support --filter)
+    if (options.filter) {
+      const filterLower = options.filter.toLowerCase();
+      entries = entries.filter((e) =>
+        e.message.toLowerCase().includes(filterLower)
+      );
+    }
+
+    // Client-side line limit (CLI doesn't support --lines)
+    if (options.lines && entries.length > options.lines) {
+      entries = entries.slice(-options.lines);
+    }
+
+    return entries;
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Unknown error fetching logs";
 
-    // If the CLI fails, return an empty array with a note
+    // If the CLI fails with "no logs" type messages, return empty
     if (message.includes("No logs found") || message.includes("No deployments")) {
       return [];
     }
 
     throw new Error(`Failed to fetch logs via Railway CLI: ${message}`);
   }
+}
+
+/**
+ * Fetch logs for specific deployment IDs, combining results.
+ */
+export function fetchLogsForDeployments(
+  deploymentIds: string[],
+  options?: { build?: boolean; since?: string; until?: string }
+): LogEntry[] {
+  const allEntries: LogEntry[] = [];
+
+  for (const id of deploymentIds) {
+    try {
+      const entries = fetchLogs({
+        deploymentId: id,
+        build: options?.build,
+        since: options?.since,
+        until: options?.until,
+      });
+      allEntries.push(...entries);
+    } catch {
+      // Individual deployment log fetch may fail — continue with others
+    }
+  }
+
+  // Sort by timestamp and deduplicate
+  allEntries.sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
+
+  return allEntries;
 }
 
 /**

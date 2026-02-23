@@ -1,15 +1,14 @@
 import chalk from "chalk";
 import ora from "ora";
 import type { Command } from "commander";
-import { getLinkedStatus, verifyAuth, isCliInstalled } from "../services/auth.js";
+import { verifyAuth } from "../services/auth.js";
 import { collectServiceHealth } from "../services/metrics.js";
 import { analyzeWithClaude, buildRawReport } from "../services/analyzer.js";
 import { parsePeriod } from "../utils/time.js";
+import { fetchProject } from "../services/railway-client.js";
 
 interface AnalyzeOptions {
   period: string;
-  service?: string;
-  environment?: string;
   lines?: string;
   filter?: string;
   raw?: boolean;
@@ -28,97 +27,84 @@ export function registerAnalyzeCommand(program: Command): void {
       "Time period to analyze (e.g., 1h, 6h, 24h, 7d, 2w)",
       "1h"
     )
-    .option("-s, --service <name>", "Service name or ID (uses linked service if omitted)")
-    .option("-e, --environment <name>", "Environment name or ID (uses linked environment if omitted)")
     .option("-n, --lines <count>", "Number of log lines to fetch", "500")
     .option("-f, --filter <query>", "Log filter query (Railway filter syntax)")
     .option("--raw", "Show raw metrics without Claude analysis")
     .option("--json", "Output the raw health report as JSON")
     .option("-o, --output <file>", "Write the report to a file")
-    .action(async (options: AnalyzeOptions) => {
-      await runAnalysis(options);
+    .action(async (options: AnalyzeOptions, cmd: Command) => {
+      const globals = cmd.optsWithGlobals();
+      const projectId: string = globals.projectId;
+      const environmentId: string = globals.environmentId;
+      const serviceId: string | undefined = globals.serviceId;
+
+      await runAnalysis(options, projectId, environmentId, serviceId);
     });
 }
 
-async function runAnalysis(options: AnalyzeOptions): Promise<void> {
+async function runAnalysis(
+  options: AnalyzeOptions,
+  projectId: string,
+  environmentId: string,
+  serviceId?: string
+): Promise<void> {
   const spinner = ora();
 
   try {
-    // Step 1: Verify prerequisites
-    spinner.start("Checking Railway CLI...");
-
-    if (!isCliInstalled()) {
-      spinner.fail("Railway CLI not found");
-      console.log(
-        chalk.yellow(
-          "\nInstall the Railway CLI:\n  npm install -g @railway/cli\n\nThen authenticate:\n  railway login"
-        )
-      );
-      process.exit(1);
-    }
-    spinner.succeed("Railway CLI found");
-
     spinner.start("Verifying authentication...");
-    const user = verifyAuth();
-    spinner.succeed(`Authenticated as ${chalk.cyan(user)}`);
-
-    // Step 2: Get linked project context
-    spinner.start("Getting project context...");
-    const status = getLinkedStatus();
-
-    if (!status.project?.id || !status.environment?.id) {
-      spinner.fail("No linked project");
-      console.log(
-        chalk.yellow(
-          "\nLink a Railway project first:\n  railway link\n\nThen select a service:\n  railway service"
-        )
-      );
-      process.exit(1);
-    }
-
-    const serviceId = options.service || status.service?.id;
-    const serviceName = options.service || status.service?.name;
-    const environmentId = options.environment || status.environment?.id;
-    const environmentName = options.environment || status.environment?.name || "production";
+    const authSource = await verifyAuth();
+    spinner.succeed(`Authenticated via ${chalk.cyan(authSource)}`);
 
     if (!serviceId) {
       spinner.fail("No service specified");
       console.log(
-        chalk.yellow(
-          "\nLink a service or specify one:\n  railway service\n  railway-metrics analyze --service <name>"
-        )
+        chalk.yellow("\nProvide --service-id <id> to specify the service.")
       );
       process.exit(1);
     }
 
+    // Resolve human-readable names from project metadata
+    spinner.start("Resolving project details...");
+    let serviceName = serviceId;
+    let environmentName = environmentId;
+    try {
+      const { project } = await fetchProject(projectId);
+      const svc = project.services.edges.find((e) => e.node.id === serviceId);
+      if (svc) serviceName = svc.node.name;
+      const env = project.environments.edges.find((e) => e.node.id === environmentId);
+      if (env) environmentName = env.node.name;
+    } catch {
+      // Fall back to IDs if project query fails
+    }
+
     spinner.succeed(
-      `Project: ${chalk.cyan(status.project.name)} | Environment: ${chalk.cyan(environmentName)} | Service: ${chalk.cyan(serviceName || serviceId)}`
+      `Project: ${chalk.cyan(projectId)} | Environment: ${chalk.cyan(environmentName)} | Service: ${chalk.cyan(serviceName)}`
     );
 
-    // Step 3: Parse time period
     const { start, end } = parsePeriod(options.period);
     console.log(
       chalk.dim(`\nAnalysis period: ${start} to ${end} (${options.period})`)
     );
 
-    // Step 4: Collect health data
-    spinner.start("Fetching metrics (CPU, memory, network)...");
+    spinner.start("Fetching metrics (CPU, memory, network, HTTP)...");
     const report = await collectServiceHealth({
-      projectId: status.project.id,
+      projectId,
       environmentId,
       environmentName,
       serviceId,
-      serviceName: serviceName || serviceId,
+      serviceName,
       startDate: start,
       endDate: end,
       logLines: options.lines ? parseInt(options.lines, 10) : 500,
       logFilter: options.filter,
     });
+    const httpInfo = report.metrics.http
+      ? `, ${report.metrics.http.totalRequests} HTTP requests`
+      : "";
     spinner.succeed(
-      `Collected ${report.metrics.cpu.dataPoints} metric data points, ${report.deployments.length} deployments, ${report.logs.length} log entries`
+      `Collected ${report.metrics.cpu.dataPoints} metric data points, ${report.deployments.length} deployments, ${report.logs.length} log entries${httpInfo}`
     );
 
-    // Step 5: Output based on mode
     if (options.json) {
       const jsonOutput = JSON.stringify(report, null, 2);
       if (options.output) {
@@ -143,7 +129,6 @@ async function runAnalysis(options: AnalyzeOptions): Promise<void> {
       return;
     }
 
-    // Step 6: Analyze with Claude
     if (!process.env.ANTHROPIC_API_KEY) {
       console.log(
         chalk.yellow(

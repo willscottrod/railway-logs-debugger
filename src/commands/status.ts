@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import ora from "ora";
 import type { Command } from "commander";
-import { getLinkedStatus, verifyAuth, isCliInstalled } from "../services/auth.js";
+import { verifyAuth } from "../services/auth.js";
 import { fetchProject, fetchDeployments } from "../services/railway-client.js";
 
 export function registerStatusCommand(program: Command): void {
@@ -9,35 +9,30 @@ export function registerStatusCommand(program: Command): void {
     .command("status")
     .description("Show the current Railway project, service, and deployment status")
     .option("--json", "Output as JSON")
-    .action(async (options: { json?: boolean }) => {
+    .action(async (options: { json?: boolean }, cmd: Command) => {
+      const globals = cmd.optsWithGlobals();
+      const projectId: string = globals.projectId;
+      const environmentId: string = globals.environmentId;
+      const serviceId: string | undefined = globals.serviceId;
       const spinner = ora();
 
       try {
-        if (!isCliInstalled()) {
-          console.error(chalk.red("Railway CLI not found. Install: npm install -g @railway/cli"));
-          process.exit(1);
-        }
-
         spinner.start("Verifying authentication...");
-        const user = verifyAuth();
-        spinner.succeed(`Authenticated as ${chalk.cyan(user)}`);
-
-        spinner.start("Getting project context...");
-        const status = getLinkedStatus();
-
-        if (!status.project?.id) {
-          spinner.fail("No linked project");
-          console.log(chalk.yellow("\nLink a project: railway link"));
-          process.exit(1);
-        }
-        spinner.succeed("Project context loaded");
+        const authSource = await verifyAuth();
+        spinner.succeed(`Authenticated via ${chalk.cyan(authSource)}`);
 
         spinner.start("Fetching project details...");
-        const projectData = await fetchProject(status.project.id);
+        const projectData = await fetchProject(projectId);
         spinner.succeed("Project details fetched");
 
         if (options.json) {
-          console.log(JSON.stringify({ status, project: projectData.project }, null, 2));
+          console.log(
+            JSON.stringify(
+              { projectId, environmentId, serviceId, project: projectData.project },
+              null,
+              2
+            )
+          );
           return;
         }
 
@@ -45,34 +40,30 @@ export function registerStatusCommand(program: Command): void {
         console.log(chalk.bold(`\nProject: ${chalk.cyan(project.name)}`));
         console.log(`  ID: ${chalk.dim(project.id)}`);
 
-        if (status.environment) {
-          console.log(`  Environment: ${chalk.green(status.environment.name)} (${chalk.dim(status.environment.id)})`);
-        }
-
         console.log(chalk.bold("\nServices:"));
         for (const edge of project.services.edges) {
           const svc = edge.node;
-          const isLinked = svc.id === status.service?.id;
-          const marker = isLinked ? chalk.green(" <-- linked") : "";
+          const isLinked = svc.id === serviceId;
+          const marker = isLinked ? chalk.green(" <-- active") : "";
           console.log(`  - ${svc.name} (${chalk.dim(svc.id)})${marker}`);
         }
 
         console.log(chalk.bold("\nEnvironments:"));
         for (const edge of project.environments.edges) {
           const env = edge.node;
-          const isCurrent = env.id === status.environment?.id;
-          const marker = isCurrent ? chalk.green(" <-- current") : "";
+          const isCurrent = env.id === environmentId;
+          const marker = isCurrent ? chalk.green(" <-- active") : "";
           console.log(`  - ${env.name} (${chalk.dim(env.id)})${marker}`);
         }
 
-        // Fetch recent deployments for the linked service
-        if (status.service?.id && status.environment?.id) {
+        // Fetch recent deployments for the service
+        if (serviceId) {
           spinner.start("Fetching recent deployments...");
           try {
             const deployments = await fetchDeployments(
-              status.project.id,
-              status.environment.id,
-              status.service.id,
+              projectId,
+              environmentId,
+              serviceId,
               5
             );
             spinner.succeed("Deployments fetched");

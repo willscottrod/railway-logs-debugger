@@ -14,12 +14,13 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
-    "commander": "^13.1.0",
-    "graphql-request": "^7.1.2",
-    "graphql": "^16.10.0",
     "chalk": "^5.4.1",
-    "ora": "^8.1.1",
-    "dayjs": "^1.11.13"
+    "commander": "^13.1.0",
+    "dayjs": "^1.11.13",
+    "dotenv": "^17.3.1",
+    "graphql": "^16.10.0",
+    "graphql-request": "^7.1.2",
+    "ora": "^8.1.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

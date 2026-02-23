@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd D:/railway-logs-debugger && npm run typecheck 2>&1)",
+      "WebFetch(domain:docs.railway.com)",
+      "WebSearch",
+      "WebFetch(domain:www.postman.com)",
+      "Bash(curl:*)",
+      "Bash(node:*)",
+      "WebFetch(domain:deepwiki.com)",
+      "WebFetch(domain:gql-collection-server.up.railway.app)",
+      "WebFetch(domain:blog.railway.com)",
+      "Bash(cd /d/railway-logs-debugger && npm run typecheck 2>&1)",
+      "Bash(railway logs:*)",
+      "Bash(head:*)",
+      "Bash(cd /d/railway-logs-debugger && npx tsx -e \"import 'dotenv/config'; console.log\\('TOKEN:', process.env.RAILWAY_TOKEN?.substring\\(0,8\\) + '...'\\); console.log\\('ANTHRO:', process.env.ANTHROPIC_API_KEY?.substring\\(0,12\\) + '...'\\);\" 2>&1)",
+      "Bash(cd /d/railway-logs-debugger && npx tsx probe-ts.ts 2>&1)",
+      "Bash(cd /d/railway-logs-debugger && npx tsx probe-ts.ts \"https://railway.com/project/cdaa4865-8678-4abe-acde-066cf95140bc/service/36b0f5f7-5135-4955-a090-278fb46801d7?environmentId=ef135475-706c-4537-81a9-7f88ae026d88\" 2>&1)"
+    ]
+  }
+}

@@ -4,12 +4,17 @@ import type {
   MetricsQueryVariables,
   DeploymentsResponse,
   MetricMeasurement,
+  HttpMetricsResponse,
+  LogEntry,
 } from "../types/railway.js";
 import { getToken } from "./auth.js";
 
 const RAILWAY_API_ENDPOINT = "https://backboard.railway.com/graphql/v2";
+const RAILWAY_INTERNAL_ENDPOINT =
+  "https://backboard.railway.com/graphql/internal?q=httpServiceTabMetrics";
 
 let clientInstance: GraphQLClient | null = null;
+let internalClientInstance: GraphQLClient | null = null;
 
 async function getClient(): Promise<GraphQLClient> {
   if (clientInstance) return clientInstance;
@@ -23,6 +28,20 @@ async function getClient(): Promise<GraphQLClient> {
   });
 
   return clientInstance;
+}
+
+async function getInternalClient(): Promise<GraphQLClient> {
+  if (internalClientInstance) return internalClientInstance;
+
+  const token = await getToken();
+  internalClientInstance = new GraphQLClient(RAILWAY_INTERNAL_ENDPOINT, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  return internalClientInstance;
 }
 
 const METRICS_QUERY = gql`
@@ -114,6 +133,61 @@ const PROJECT_QUERY = gql`
   }
 `;
 
+const HTTP_METRICS_QUERY = gql`
+  query httpServiceTabMetrics(
+    $serviceId: String!
+    $environmentId: String!
+    $startDate: DateTime!
+    $endDate: DateTime!
+    $stepSeconds: Int
+    $statusCode: Int
+    $method: String
+    $path: String
+  ) {
+    httpDurationMetrics(
+      serviceId: $serviceId
+      environmentId: $environmentId
+      startDate: $startDate
+      endDate: $endDate
+      stepSeconds: $stepSeconds
+      statusCode: $statusCode
+      method: $method
+      path: $path
+    ) {
+      samples {
+        ...HttpDurationMetricsSampleFields
+      }
+    }
+    httpMetricsGroupedByStatus(
+      serviceId: $serviceId
+      environmentId: $environmentId
+      startDate: $startDate
+      endDate: $endDate
+      stepSeconds: $stepSeconds
+      method: $method
+      path: $path
+    ) {
+      statusCode
+      samples {
+        ...HttpMetricsSampleFields
+      }
+    }
+  }
+
+  fragment HttpDurationMetricsSampleFields on HttpDurationMetricsSample {
+    ts
+    p50
+    p90
+    p95
+    p99
+  }
+
+  fragment HttpMetricsSampleFields on HttpMetricsSample {
+    ts
+    value
+  }
+`;
+
 /**
  * Fetch metrics for a service in a given time range.
  */
@@ -174,6 +248,26 @@ export async function fetchDeployments(
 }
 
 /**
+ * Fetch HTTP latency and status code metrics from Railway's internal API.
+ */
+export async function fetchHttpMetrics(
+  environmentId: string,
+  serviceId: string,
+  startDate: string,
+  endDate: string,
+  stepSeconds?: number
+): Promise<HttpMetricsResponse> {
+  const client = await getInternalClient();
+  return client.request<HttpMetricsResponse>(HTTP_METRICS_QUERY, {
+    serviceId,
+    environmentId,
+    startDate,
+    endDate,
+    stepSeconds,
+  });
+}
+
+/**
  * Fetch project details including services and environments.
  */
 export async function fetchProject(
@@ -188,4 +282,68 @@ export async function fetchProject(
 }> {
   const client = await getClient();
   return client.request(PROJECT_QUERY, { id: projectId });
+}
+
+const DEPLOYMENT_LOGS_QUERY = gql`
+  query deploymentLogs($deploymentId: String!, $limit: Int) {
+    deploymentLogs(deploymentId: $deploymentId, limit: $limit) {
+      timestamp
+      message
+      severity
+    }
+  }
+`;
+
+const BUILD_LOGS_QUERY = gql`
+  query buildLogs($deploymentId: String!, $limit: Int) {
+    buildLogs(deploymentId: $deploymentId, limit: $limit) {
+      timestamp
+      message
+      severity
+    }
+  }
+`;
+
+interface GqlLogEntry {
+  timestamp: string;
+  message: string;
+  severity?: string;
+}
+
+/**
+ * Fetch deployment logs via GraphQL API for a single deployment.
+ */
+export async function fetchDeploymentLogs(
+  deploymentId: string,
+  limit: number = 500
+): Promise<LogEntry[]> {
+  const client = await getClient();
+  const data = await client.request<{ deploymentLogs: GqlLogEntry[] }>(
+    DEPLOYMENT_LOGS_QUERY,
+    { deploymentId, limit }
+  );
+  return data.deploymentLogs.map((l) => ({
+    timestamp: l.timestamp,
+    message: l.message,
+    severity: l.severity || "info",
+  }));
+}
+
+/**
+ * Fetch build logs via GraphQL API for a single deployment.
+ */
+export async function fetchBuildLogs(
+  deploymentId: string,
+  limit: number = 500
+): Promise<LogEntry[]> {
+  const client = await getClient();
+  const data = await client.request<{ buildLogs: GqlLogEntry[] }>(
+    BUILD_LOGS_QUERY,
+    { deploymentId, limit }
+  );
+  return data.buildLogs.map((l) => ({
+    timestamp: l.timestamp,
+    message: l.message,
+    severity: l.severity || "info",
+  }));
 }
