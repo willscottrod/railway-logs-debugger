@@ -12,7 +12,7 @@ dayjs.extend(duration);
 export function parsePeriod(period: string): { start: string; end: string } {
   const end = dayjs().toISOString();
 
-  // Check for relative time formats
+  // Check for relative time formats (e.g., 1h, 30m, 7d, 2w)
   const match = period.match(/^(\d+)([smhdw])$/);
   if (match) {
     const amount = parseInt(match[1], 10);
@@ -30,9 +30,16 @@ export function parsePeriod(period: string): { start: string; end: string } {
     return { start, end };
   }
 
-  // Try ISO 8601 date string
+  // Plain number without a unit defaults to hours (e.g., "244" → "244h")
+  if (/^\d+$/.test(period)) {
+    const amount = parseInt(period, 10);
+    const start = dayjs().subtract(amount, "hour").toISOString();
+    return { start, end };
+  }
+
+  // Try ISO 8601 date string (must look like a full date, not a bare number)
   const parsed = dayjs(period);
-  if (parsed.isValid()) {
+  if (parsed.isValid() && parsed.year() >= 2000) {
     return { start: parsed.toISOString(), end };
   }
 
